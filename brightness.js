@@ -1,41 +1,21 @@
 #!/usr/bin/env bun
 import { resolve } from 'path'
-import SunCalc from 'suncalc'
+import { getPosition as calcSunPosition } from 'suncalc'
 
-const GEO_POSITION = Bun.argv[2].split(',').map(s => parseFloat(s))
 const MIN_BRIGHTNESS = 10
-const MAX_BRIGTNESS = 65
+const MAX_BRIGTNESS = 85
 
-const solarTimes = SunCalc.getTimes(new Date(), ...GEO_POSITION)
-const morningTransitionStart = solarTimes.dawn.getTime()
-const morningTransitionEnd = solarTimes.goldenHourEnd.getTime()
-const eveningTransitionStart = solarTimes.goldenHour.getTime()
-const eveningTransitionEnd = solarTimes.dusk.getTime()
+const position = Bun.argv[2].split(',').map(s => parseFloat(s))
 
-const brightness = (now = Date.now()) => {
-	const EXP = Math.exp(1)
+// It was calculated by finding the yearly maximum altitude for my geo position
+const altitudeMultiplier = 1.42 * 2
 
-	if (now < morningTransitionStart || now > eveningTransitionEnd) {
-		return MIN_BRIGHTNESS
-	}
+const clamp = (min, value, max) => Math.min(Math.max(min, value), max)
 
-	if (now >= morningTransitionStart && now <= morningTransitionEnd) {
-		const range = morningTransitionEnd - morningTransitionStart
-		const shift = now - morningTransitionStart
-		const x = 2 * EXP / range * shift
-		const k = (Math.tanh(x) + 1) / 2
-		return Math.round(k * (MAX_BRIGTNESS - MIN_BRIGHTNESS))
-	}
-
-	if (now >= eveningTransitionStart && now <= eveningTransitionEnd) {
-		const range = eveningTransitionEnd - eveningTransitionStart
-		const shift = now - eveningTransitionStart
-		const x = 2 * EXP / range * shift
-		const k = (Math.tanh(2 * EXP - x) + 1) / 2
-		return Math.round(k * (MAX_BRIGTNESS - MIN_BRIGHTNESS))
-	}
-
-	return MAX_BRIGTNESS
+const brightness = (timeAndDate = new Date()) => {
+	const { altitude } = calcSunPosition(timeAndDate, ...position)
+	const shift = clamp(0, altitude * altitudeMultiplier / (Math.PI / 2), 1)
+	return MIN_BRIGHTNESS + Math.round(shift * (MAX_BRIGTNESS - MIN_BRIGHTNESS))
 }
 
 
@@ -53,7 +33,8 @@ const brightness = (now = Date.now()) => {
 // for (let h = 0; h < 24; ++h) {
 // 	for (let m = 0; m < 60; m += 5) {
 // 		const time = [h, m.toString().padStart(2, '0')].join(':')
-// 		console.log(time, brightness(timestamp(time)))
+// 		const altitude = calcSunPosition(timestamp(time), ...position).altitude
+// 		console.log(time, brightness(timestamp(time)), altitude)
 // 	}
 // }
 
@@ -67,8 +48,9 @@ const currentBrighness = await cacheFile.exists()
 	? parseInt(await cacheFile.text(), 10)
 	: -1
 const targetBrigtness = brightness(Date.now())
+const tollerance = 3
 
-if (isNaN(currentBrighness) || targetBrigtness != currentBrighness) {
+if (isNaN(currentBrighness) || Math.abs(targetBrigtness - currentBrighness) > tollerance) {
 	const ddcctl = Bun.spawn(['ddcctl', '-d', '1', '-b', targetBrigtness])
 	await ddcctl.exited
 
