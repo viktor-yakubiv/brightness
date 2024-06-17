@@ -2,20 +2,51 @@
 import { resolve } from 'path'
 import { getPosition as calcSunPosition } from 'suncalc'
 
-const MIN_BRIGHTNESS = 10
-const MAX_BRIGTNESS = 85
+const weatherConditions = new Map([
+	[1.0, 'Clear'],
+	[0.8, 'Mostly clear'],
+	[0.6, 'Partly cloudy'],
+	[0.6, 'Haze'],
+	[0.5, 'Fog'],
+	[1.0, 'Windy'],
+	[0.7, 'Breezy'],
+	[0.5, 'Cloudy'],
+	[0.4, 'Mostly cloudy'],
+	[0.4, 'Rain'],
+	[0.4, 'Thunderstorm'],
+	[0.4, 'Heavy rain'],
+	[0.5, 'Drizzle'],
+	[0.5, 'Freezing drizzle'],
+	[0.4, 'Snow'],
+	[0.4, 'Heavy snow'],
+	[0.4, 'Blizzard'],
+	[0.4, 'Freezing rain'],
+	[0.4, 'Sleet'],
+	[0.4, 'Wintry mix'],
+].map(entry => entry.reverse()))
+
+const MIN_BRIGHTNESS = 0
+const MAX_BRIGTNESS = 80
 
 const position = Bun.argv[2].split(',').map(s => parseFloat(s))
+const condition = Bun.argv[3]
 
 // It was calculated by finding the yearly maximum altitude for my geo position
 const altitudeMultiplier = 1.42 * 2
 
 const clamp = (min, value, max) => Math.min(Math.max(min, value), max)
+const scale = (value, min, max) => min + value * (max - min)
+const round = Math.round
 
 const brightness = (timeAndDate = new Date()) => {
 	const { altitude } = calcSunPosition(timeAndDate, ...position)
 	const shift = clamp(0, altitude * altitudeMultiplier / (Math.PI / 2), 1)
-	return MIN_BRIGHTNESS + Math.round(shift * (MAX_BRIGTNESS - MIN_BRIGHTNESS))
+
+	const baseSolarValue = round(scale(shift, MIN_BRIGHTNESS, MAX_BRIGTNESS))
+
+	const conditionCoefficient = weatherConditions.get(condition) ?? 1.0
+	const cloudCorrectedValue = baseSolarValue * conditionCoefficient
+	return cloudCorrectedValue
 }
 
 
@@ -54,5 +85,10 @@ if (isNaN(currentBrighness) || Math.abs(targetBrigtness - currentBrighness) > to
 	const ddcctl = Bun.spawn(['ddcctl', '-d', '1', '-b', targetBrigtness])
 	await ddcctl.exited
 
-	Bun.write(cacheFile, targetBrigtness.toString())
+	// Write cache only when brightness change was successful.
+	// This prevents stale brightness when laptop is not connected to the display
+	// but the process executes constantly failing.
+	if (ddcctl.exitCode === 0) {
+		Bun.write(cacheFile, targetBrigtness.toString())
+	}
 }
